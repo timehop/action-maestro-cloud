@@ -18,8 +18,11 @@ export type Params = {
   env?: { [key: string]: string },
   async?: boolean,
   androidApiLevel?: number,
+  iOSVersion?: number,
   includeTags: string[],
   excludeTags: string[],
+  appBinaryId: string,
+  deviceLocale?: string,
 }
 
 function getBranchName(): string {
@@ -82,6 +85,10 @@ function getAndroidApiLevel(apiLevel?: string): number | undefined {
   return apiLevel ? +apiLevel : undefined
 }
 
+function getIOSVersion(iosVersion?: string): number | undefined {
+  return iosVersion ? +iosVersion : undefined
+}
+
 function parseTags(tags?: string): string[] {
   if (tags === undefined || tags === '') return []
 
@@ -102,14 +109,22 @@ export async function getParameters(): Promise<Params> {
   const apiUrl = core.getInput('api-url', { required: false }) || 'https://api.mobile.dev'
   const name = core.getInput('name', { required: false }) || getInferredName()
   const apiKey = core.getInput('api-key', { required: true })
-  const appFilePath = core.getInput('app-file', { required: true })
   const mappingFileInput = core.getInput('mapping-file', { required: false })
   const workspaceFolder = core.getInput('workspace', { required: false })
   const mappingFile = mappingFileInput && validateMappingFile(mappingFileInput)
   const async = core.getInput('async', { required: false }) === 'true'
   const androidApiLevelString = core.getInput('android-api-level', { required: false })
+  const iOSVersionString = core.getInput('ios-version', { required: false })
   const includeTags = parseTags(core.getInput('include-tags', { required: false }))
   const excludeTags = parseTags(core.getInput('exclude-tags', { required: false }))
+
+  const appFilePath = core.getInput('app-file', { required: false })
+  const appBinaryId = core.getInput('app-binary-id', { required: false })
+  if (!(appFilePath !== "") !== (appBinaryId !== "")) {
+    throw new Error("Either app-file or app-binary-id must be used")
+  }
+
+  const deviceLocale = core.getInput('device-locale', { required: false })
 
   var env: { [key: string]: string } = {}
   env = core.getMultilineInput('env', { required: false })
@@ -133,5 +148,27 @@ export async function getParameters(): Promise<Params> {
   const repoName = getRepoName()
   const pullRequestId = getPullRequestId()
   const androidApiLevel = getAndroidApiLevel(androidApiLevelString)
-  return { apiUrl, name, apiKey, appFilePath, mappingFile, workspaceFolder, branchName, commitSha, repoOwner, repoName, pullRequestId, env, async, androidApiLevel, includeTags, excludeTags }
+  const iOSVersion = getIOSVersion(iOSVersionString)
+
+  return {
+    apiUrl,
+    name,
+    apiKey,
+    appFilePath,
+    mappingFile,
+    workspaceFolder,
+    branchName,
+    commitSha,
+    repoOwner,
+    repoName,
+    pullRequestId,
+    env,
+    async,
+    androidApiLevel,
+    iOSVersion,
+    includeTags,
+    excludeTags,
+    appBinaryId,
+    deviceLocale,
+  }
 }

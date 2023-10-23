@@ -46538,7 +46538,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.UploadStatusError = exports.BenchmarkStatus = void 0;
+exports.CancellationReason = exports.UploadStatusError = exports.BenchmarkStatus = void 0;
 const node_fetch_1 = __importStar(__nccwpck_require__(4429));
 var BenchmarkStatus;
 (function (BenchmarkStatus) {
@@ -46556,6 +46556,13 @@ class UploadStatusError {
     }
 }
 exports.UploadStatusError = UploadStatusError;
+var CancellationReason;
+(function (CancellationReason) {
+    CancellationReason["BENCHMARK_DEPENDENCY_FAILED"] = "BENCHMARK_DEPENDENCY_FAILED";
+    CancellationReason["INFRA_ERROR"] = "INFRA_ERROR";
+    CancellationReason["OVERLAPPING_BENCHMARK"] = "OVERLAPPING_BENCHMARK";
+    CancellationReason["TIMEOUT"] = "TIMEOUT";
+})(CancellationReason = exports.CancellationReason || (exports.CancellationReason = {}));
 class ApiClient {
     constructor(apiKey, apiUrl) {
         this.apiKey = apiKey;
@@ -46565,7 +46572,9 @@ class ApiClient {
         return __awaiter(this, void 0, void 0, function* () {
             const formData = new node_fetch_1.FormData();
             formData.set('request', JSON.stringify(request));
-            formData.set('app_binary', (0, node_fetch_1.fileFromSync)(appFile));
+            if (appFile) {
+                formData.set('app_binary', (0, node_fetch_1.fileFromSync)(appFile));
+            }
             if (workspaceZip) {
                 formData.set('workspace', (0, node_fetch_1.fileFromSync)(workspaceZip));
             }
@@ -46588,7 +46597,7 @@ class ApiClient {
     }
     getUploadStatus(uploadId) {
         return __awaiter(this, void 0, void 0, function* () {
-            const res = yield (0, node_fetch_1.default)(`${this.apiUrl}/v2/upload/${uploadId}/status`, {
+            const res = yield (0, node_fetch_1.default)(`${this.apiUrl}/v2/upload/${uploadId}/status?includeErrors=true`, {
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
@@ -46656,18 +46665,35 @@ const WAIT_TIMEOUT_MS = 1000 * 60 * 30; // 30 minutes
 const INTERVAL_MS = 10000; // 10 seconds
 const TERMINAL_STATUSES = new Set([ApiClient_1.BenchmarkStatus.SUCCESS, ApiClient_1.BenchmarkStatus.ERROR, ApiClient_1.BenchmarkStatus.WARNING, ApiClient_1.BenchmarkStatus.CANCELED]);
 const isCompleted = (flow) => TERMINAL_STATUSES.has(flow.status);
+const getCanceledStatusMessage = (reason) => {
+    switch (reason) {
+        case ApiClient_1.CancellationReason.BENCHMARK_DEPENDENCY_FAILED:
+        case ApiClient_1.CancellationReason.OVERLAPPING_BENCHMARK:
+            return 'Skipped';
+        case ApiClient_1.CancellationReason.TIMEOUT:
+            return 'Timeout';
+        case ApiClient_1.CancellationReason.INFRA_ERROR:
+        default:
+            return 'Canceled';
+    }
+};
+const renderError = (errors) => {
+    if (!errors || errors.length === 0)
+        return '';
+    return ` (${errors[0]})`;
+};
 const printFlowResult = (flow) => {
     if (flow.status === ApiClient_1.BenchmarkStatus.SUCCESS) {
         (0, log_1.success)(`[Passed] ${flow.name}`);
     }
     else if (flow.status === ApiClient_1.BenchmarkStatus.ERROR) {
-        (0, log_1.err)(`[Failed] ${flow.name}`);
+        (0, log_1.err)(`[Failed] ${flow.name}${renderError(flow.errors)}`);
     }
     else if (flow.status === ApiClient_1.BenchmarkStatus.WARNING) {
         (0, log_1.warning)(`[Warning] ${flow.name}`);
     }
     else if (flow.status === ApiClient_1.BenchmarkStatus.CANCELED) {
-        (0, log_1.canceled)(`[Canceled] ${flow.name}`);
+        (0, log_1.canceled)(`[${getCanceledStatusMessage(flow.cancellationReason)}] ${flow.name}`);
     }
 };
 const flowWord = (count) => count === 1 ? 'Flow' : 'Flows';
@@ -46727,6 +46753,8 @@ class StatusPoller {
                     console.log('');
                     (0, log_1.info)(`==== View details in the console ====\n`);
                     (0, log_1.info)(`${this.consoleUrl}`);
+                    core.setOutput('MAESTRO_CLOUD_UPLOAD_STATUS', status);
+                    core.setOutput('MAESTRO_CLOUD_FLOW_RESULTS', flows);
                     if (status === ApiClient_1.BenchmarkStatus.ERROR) {
                         const resultStr = getFailedFlowsCountStr(flows);
                         console.log('');
@@ -47018,10 +47046,13 @@ const getConsoleUrl = (uploadId, teamId, appId) => {
 };
 exports.getConsoleUrl = getConsoleUrl;
 const run = () => __awaiter(void 0, void 0, void 0, function* () {
-    const { apiKey, apiUrl, name, appFilePath, mappingFile, workspaceFolder, branchName, commitSha, repoOwner, repoName, pullRequestId, env, async, androidApiLevel, includeTags, excludeTags } = yield (0, params_1.getParameters)();
-    const appFile = yield (0, app_file_1.validateAppFile)(yield (0, archive_utils_1.zipIfFolder)(appFilePath));
-    if (!knownAppTypes.includes(appFile.type)) {
-        throw new Error(`Unsupported app file type: ${appFile.type}`);
+    const { apiKey, apiUrl, name, appFilePath, mappingFile, workspaceFolder, branchName, commitSha, repoOwner, repoName, pullRequestId, env, async, androidApiLevel, iOSVersion, includeTags, excludeTags, appBinaryId } = yield (0, params_1.getParameters)();
+    let appFile = null;
+    if (appFilePath !== "") {
+        appFile = yield (0, app_file_1.validateAppFile)(yield (0, archive_utils_1.zipIfFolder)(appFilePath));
+        if (!knownAppTypes.includes(appFile.type)) {
+            throw new Error(`Unsupported app file type: ${appFile.type}`);
+        }
     }
     const workspaceZip = yield createWorkspaceZip(workspaceFolder);
     const client = new ApiClient_1.default(apiKey, apiUrl);
@@ -47036,12 +47067,16 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
         env: env,
         agent: 'github',
         androidApiLevel: androidApiLevel,
+        iOSVersion: iOSVersion,
         includeTags: includeTags,
         excludeTags: excludeTags,
+        appBinaryId: appBinaryId || undefined,
     };
-    const { uploadId, teamId, targetId: appId } = yield client.uploadRequest(request, appFile.path, workspaceZip, mappingFile && (yield (0, archive_utils_1.zipIfFolder)(mappingFile)));
+    const { uploadId, teamId, targetId: appId, appBinaryId: uploadedBinaryId } = yield client.uploadRequest(request, appFile && appFile.path, workspaceZip, mappingFile && (yield (0, archive_utils_1.zipIfFolder)(mappingFile)));
     const consoleUrl = (0, exports.getConsoleUrl)(uploadId, teamId, appId);
     (0, log_1.info)(`Visit the web console for more details about the upload: ${consoleUrl}\n`);
+    core.setOutput('MAESTRO_CLOUD_CONSOLE_URL', consoleUrl);
+    core.setOutput('MAESTRO_CLOUD_APP_BINARY_ID', uploadedBinaryId);
     !async && new StatusPoller_1.default(client, uploadId, consoleUrl).startPolling();
 });
 run().catch(e => {
@@ -47184,6 +47219,9 @@ function getInferredName() {
 function getAndroidApiLevel(apiLevel) {
     return apiLevel ? +apiLevel : undefined;
 }
+function getIOSVersion(iosVersion) {
+    return iosVersion ? +iosVersion : undefined;
+}
 function parseTags(tags) {
     if (tags === undefined || tags === '')
         return [];
@@ -47201,14 +47239,19 @@ function getParameters() {
         const apiUrl = core.getInput('api-url', { required: false }) || 'https://api.mobile.dev';
         const name = core.getInput('name', { required: false }) || getInferredName();
         const apiKey = core.getInput('api-key', { required: true });
-        const appFilePath = core.getInput('app-file', { required: true });
         const mappingFileInput = core.getInput('mapping-file', { required: false });
         const workspaceFolder = core.getInput('workspace', { required: false });
         const mappingFile = mappingFileInput && (0, app_file_1.validateMappingFile)(mappingFileInput);
         const async = core.getInput('async', { required: false }) === 'true';
         const androidApiLevelString = core.getInput('android-api-level', { required: false });
+        const iOSVersionString = core.getInput('ios-version', { required: false });
         const includeTags = parseTags(core.getInput('include-tags', { required: false }));
         const excludeTags = parseTags(core.getInput('exclude-tags', { required: false }));
+        const appFilePath = core.getInput('app-file', { required: false });
+        const appBinaryId = core.getInput('app-binary-id', { required: false });
+        if (!(appFilePath !== "") !== (appBinaryId !== "")) {
+            throw new Error("Either app-file or app-binary-id must be used");
+        }
         var env = {};
         env = core.getMultilineInput('env', { required: false })
             .map(it => {
@@ -47228,7 +47271,27 @@ function getParameters() {
         const repoName = getRepoName();
         const pullRequestId = getPullRequestId();
         const androidApiLevel = getAndroidApiLevel(androidApiLevelString);
-        return { apiUrl, name, apiKey, appFilePath, mappingFile, workspaceFolder, branchName, commitSha, repoOwner, repoName, pullRequestId, env, async, androidApiLevel, includeTags, excludeTags };
+        const iOSVersion = getIOSVersion(iOSVersionString);
+        return {
+            apiUrl,
+            name,
+            apiKey,
+            appFilePath,
+            mappingFile,
+            workspaceFolder,
+            branchName,
+            commitSha,
+            repoOwner,
+            repoName,
+            pullRequestId,
+            env,
+            async,
+            androidApiLevel,
+            iOSVersion,
+            includeTags,
+            excludeTags,
+            appBinaryId
+        };
     });
 }
 exports.getParameters = getParameters;

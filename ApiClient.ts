@@ -19,24 +19,37 @@ export type UploadRequest = {
   env?: { [key: string]: string },
   agent: string,
   androidApiLevel?: number,
+  iOSVersion?: number,
   includeTags: string[],
   excludeTags: string[],
+  appBinaryId?: string,
+  deviceLocale?: string,
 }
 
 // irrelevant data has been factored out from this model
 export type UploadResponse = {
   uploadId: string,
   teamId: string,
-  targetId: string
+  targetId: string,
+  appBinaryId: string
 }
 
 export class UploadStatusError {
   constructor(public status: number, public text: string) { }
 }
 
+export enum CancellationReason {
+  BENCHMARK_DEPENDENCY_FAILED = 'BENCHMARK_DEPENDENCY_FAILED',
+  INFRA_ERROR = 'INFRA_ERROR',
+  OVERLAPPING_BENCHMARK = 'OVERLAPPING_BENCHMARK',
+  TIMEOUT = 'TIMEOUT',
+}
+
 export type Flow = {
   name: string,
-  status: BenchmarkStatus
+  status: BenchmarkStatus,
+  errors?: string[],
+  cancellationReason?: CancellationReason
 }
 
 export type UploadStatusResponse = {
@@ -55,17 +68,19 @@ export default class ApiClient {
 
   async uploadRequest(
     request: UploadRequest,
-    appFile: string,
+    appFile: string | null,
     workspaceZip: string | null,
     mappingFile: string | null,
   ): Promise<UploadResponse> {
     const formData = new FormData()
 
     formData.set('request', JSON.stringify(request))
-    formData.set(
-      'app_binary',
-      fileFromSync(appFile)
-    )
+    if (appFile) {
+      formData.set(
+        'app_binary',
+        fileFromSync(appFile)
+      )
+    }
 
     if (workspaceZip) {
       formData.set(
@@ -98,7 +113,7 @@ export default class ApiClient {
   async getUploadStatus(
     uploadId: string,
   ): Promise<UploadStatusResponse> {
-    const res = await fetch(`${this.apiUrl}/v2/upload/${uploadId}/status`, {
+    const res = await fetch(`${this.apiUrl}/v2/upload/${uploadId}/status?includeErrors=true`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,

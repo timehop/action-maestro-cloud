@@ -58,15 +58,21 @@ const run = async () => {
     env,
     async,
     androidApiLevel,
+    iOSVersion,
     includeTags,
-    excludeTags
+    excludeTags,
+    appBinaryId,
+    deviceLocale,
   } = await getParameters()
 
-  const appFile = await validateAppFile(
-    await zipIfFolder(appFilePath)
-  );
-  if (!knownAppTypes.includes(appFile.type)) {
-    throw new Error(`Unsupported app file type: ${appFile.type}`)
+  let appFile = null
+  if (appFilePath !== "") {
+    appFile = await validateAppFile(
+      await zipIfFolder(appFilePath)
+    );
+    if (!knownAppTypes.includes(appFile.type)) {
+      throw new Error(`Unsupported app file type: ${appFile.type}`)
+    }
   }
 
   const workspaceZip = await createWorkspaceZip(workspaceFolder)
@@ -84,18 +90,23 @@ const run = async () => {
     env: env,
     agent: 'github',
     androidApiLevel: androidApiLevel,
+    iOSVersion: iOSVersion,
     includeTags: includeTags,
     excludeTags: excludeTags,
+    appBinaryId: appBinaryId || undefined,
+    deviceLocale: deviceLocale || undefined,
   }
 
-  const { uploadId, teamId, targetId: appId } = await client.uploadRequest(
+  const { uploadId, teamId, targetId: appId, appBinaryId: uploadedBinaryId } = await client.uploadRequest(
     request,
-    appFile.path,
+    appFile && appFile.path,
     workspaceZip,
     mappingFile && await zipIfFolder(mappingFile),
   )
   const consoleUrl = getConsoleUrl(uploadId, teamId, appId)
   info(`Visit the web console for more details about the upload: ${consoleUrl}\n`)
+  core.setOutput('MAESTRO_CLOUD_CONSOLE_URL', consoleUrl)
+  core.setOutput('MAESTRO_CLOUD_APP_BINARY_ID', uploadedBinaryId)
 
   !async && new StatusPoller(client, uploadId, consoleUrl).startPolling()
 }
